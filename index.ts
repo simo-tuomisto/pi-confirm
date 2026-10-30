@@ -66,12 +66,17 @@
  *   line. `rm` therefore denies any `rm` invocation, while
  *   `git push*` matches whole command lines starting with `git push`.
  *
- * The confirmation dialog offers up to three choices:
+ * The confirmation dialog offers up to four choices:
  *
- * - "Allow once"              permit just this single tool call
+ * - "Allow"                   permit just this single tool call
  * - "Allow ... for this session" remember the exact file path (write/
  *   edit), program name (bash) or whole command (powershell) as a
  *   session override with action `allow`
+ * - "Allow ... in this project" remember the same pattern as a
+ *   permanent `allow` rule in the project settings
+ *   (.pi/settings.json), so it also applies in future sessions of this
+ *   project (project settings are ignored while the project is not
+ *   trusted)
  * - "Deny"                    block the tool call
  *
  * In non-interactive mode (no UI, e.g. `pi -p`) guarded calls resolve
@@ -105,7 +110,7 @@ import {
 	type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 
-const ALLOW_ONCE = "Allow once";
+const ALLOW = "Allow";
 const DENY = "Deny";
 
 /** The three actions a pattern can be mapped to. */
@@ -689,6 +694,24 @@ export default function (pi: ExtensionAPI) {
 	// Tool call guarding
 	// ------------------------------------------------------------------
 
+	/**
+	 * Persist a pattern with action `allow` in the project settings file
+	 * (the "Allow ... in this project" dialog choice). Returns an error
+	 * message when the write fails, or undefined on success. Notifies
+	 * that the rule stays inactive while the project is not trusted.
+	 */
+	function rememberInProject(kind: "files" | "commands", pattern: string, display: string, ctx: ExtensionContext): string | undefined {
+		const settings = loadSettings(ctx);
+		const err = writeRuleToSettings(kind, settings.projectPath, pattern, "allow");
+		if (err) return err;
+		let message = `Remembered for this project: ${display}\nRule written to ${settings.projectPath}`;
+		if (!settings.projectTrusted) {
+			message += "\nNote: the project is not trusted, so its settings are ignored until the project is trusted.";
+		}
+		ctx.ui.notify(message, "info");
+		return undefined;
+	}
+
 	/** Confirm a bash tool call: per program, or the whole line for wrappers/unparseable input. */
 	async function handleBash(command: string, ctx: ExtensionContext): Promise<{ block: boolean; reason: string } | undefined> {
 		const settings = loadSettings(ctx);
@@ -715,12 +738,12 @@ export default function (pi: ExtensionAPI) {
 
 			const choice = await ctx.ui.select(
 				`Run bash command?\n\n$ ${truncate(command, 400)}\n\n⚠ ${analysis.reason}.\nThis command is confirmed as a whole and cannot be remembered.`,
-				[ALLOW_ONCE, DENY],
+				[ALLOW, DENY],
 			);
 			if (choice === DENY) {
 				return { block: true, reason: "Blocked: user denied this bash command." };
 			}
-			if (choice !== ALLOW_ONCE) {
+			if (choice !== ALLOW) {
 				return { block: true, reason: "Blocked: user dismissed the confirmation dialog." };
 			}
 			return undefined;
@@ -739,10 +762,11 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (!ctx.hasUI) return noUi();
 
-			const rememberOption = `Allow "${ref.name}" for this session`;
+			const sessionOption = `Allow "${ref.name}" for this session`;
+			const projectOption = `Allow "${ref.name}" in this project`;
 			const choice = await ctx.ui.select(
-				`Run '${ref.name}' in bash?\n\nThis bash command runs ${programNames.length} program${programNames.length === 1 ? "" : "s"}: ${programNames.join(", ")}\n\nAs invoked here:\n$ ${truncate(ref.text, 200)}\n\n${rememberOption} allows any '${ref.name}' invocation (with any arguments) for the rest of this session.`,
-				[ALLOW_ONCE, rememberOption, DENY],
+				`Run '${ref.name}' in bash?\n\nThis bash command runs ${programNames.length} program${programNames.length === 1 ? "" : "s"}: ${programNames.join(", ")}\n\nAs invoked here:\n$ ${truncate(ref.text, 200)}\n\n${sessionOption} allows any '${ref.name}' invocation (with any arguments) for the rest of this session.\n${projectOption} writes that rule to the project settings, so it also applies in future sessions of this project.`,
+				[ALLOW, sessionOption, projectOption, DENY],
 			);
 			if (choice === DENY) {
 				return { block: true, reason: `Blocked: user denied running '${ref.name}' in bash.` };
@@ -750,9 +774,12 @@ export default function (pi: ExtensionAPI) {
 			if (choice === undefined) {
 				return { block: true, reason: "Blocked: user dismissed the confirmation dialog." };
 			}
-			if (choice !== ALLOW_ONCE) {
+			if (choice === sessionOption) {
 				sessionCommands.set(escapePattern(ref.name), "allow");
 				ctx.ui.notify(`Remembered for this session: bash '${ref.name}' (any arguments)`, "info");
+			} else if (choice === projectOption) {
+				const err = rememberInProject("commands", escapePattern(ref.name), `bash '${ref.name}' (any arguments)`, ctx);
+				if (err) ctx.ui.notify(`Could not write the project rule: ${err}`, "error");
 			}
 		}
 		return undefined;
@@ -790,8 +817,12 @@ export default function (pi: ExtensionAPI) {
 			detail = `Path: ${inputPath}\nEdits: ${edits.length}${preview}`;
 		}
 
-		const rememberOption = `Allow ${inputPath} for this session`;
-		const choice = await ctx.ui.select(`${title}\n\n${detail}`, [ALLOW_ONCE, rememberOption, DENY]);
+		const sessionOption = `Allow ${inputPath} for this session`;
+		const projectOption = `Allow ${inputPath} in this project`;
+		const choice = await ctx.ui.select(
+			`${title}\n\n${detail}\n\n${projectOption} writes that rule to the project settings, so it also applies in future sessions of this project.`,
+			[ALLOW, sessionOption, projectOption, DENY],
+		);
 		if (choice === undefined) {
 			// User dismissed the dialog (e.g. Esc).
 			return { block: true, reason: "Blocked: user dismissed the confirmation dialog." };
@@ -799,9 +830,12 @@ export default function (pi: ExtensionAPI) {
 		if (choice === DENY) {
 			return { block: true, reason: "Blocked: user denied this tool call." };
 		}
-		if (choice !== ALLOW_ONCE) {
+		if (choice === sessionOption) {
 			sessionFiles.set(escapePattern(absPath), "allow");
 			ctx.ui.notify(`Remembered for this session: file '${inputPath}'`, "info");
+		} else if (choice === projectOption) {
+			const err = rememberInProject("files", escapePattern(absPath), `file '${inputPath}'`, ctx);
+			if (err) ctx.ui.notify(`Could not write the project rule: ${err}`, "error");
 		}
 		return undefined;
 	}
@@ -818,10 +852,11 @@ export default function (pi: ExtensionAPI) {
 			return { block: true, reason: "Blocked: this PowerShell command requires confirmation, but no interactive UI is available." };
 		}
 
-		const rememberOption = "Allow this command for this session";
+		const sessionOption = "Allow this command for this session";
+		const projectOption = "Allow this command in this project";
 		const choice = await ctx.ui.select(
-			`Run PowerShell command?\n\nPS> ${truncate(command, 400)}`,
-			[ALLOW_ONCE, rememberOption, DENY],
+			`Run PowerShell command?\n\nPS> ${truncate(command, 400)}\n\n${projectOption} writes that rule to the project settings, so it also applies in future sessions of this project.`,
+			[ALLOW, sessionOption, projectOption, DENY],
 		);
 		if (choice === DENY) {
 			return { block: true, reason: "Blocked: user denied this PowerShell command." };
@@ -829,9 +864,12 @@ export default function (pi: ExtensionAPI) {
 		if (choice === undefined) {
 			return { block: true, reason: "Blocked: user dismissed the confirmation dialog." };
 		}
-		if (choice !== ALLOW_ONCE) {
+		if (choice === sessionOption) {
 			sessionCommands.set(escapePattern(normalizeCommand(command)), "allow");
 			ctx.ui.notify(`Remembered for this session: PowerShell '${truncate(command, 60)}'`, "info");
+		} else if (choice === projectOption) {
+			const err = rememberInProject("commands", escapePattern(normalizeCommand(command)), `PowerShell '${truncate(command, 60)}'`, ctx);
+			if (err) ctx.ui.notify(`Could not write the project rule: ${err}`, "error");
 		}
 		return undefined;
 	}
