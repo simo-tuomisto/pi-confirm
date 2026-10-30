@@ -1,0 +1,11 @@
+{
+	"name": "pi-confirm",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Dependencies for the pi-confirm extension",
+	"dependencies": {
+		"minimatch": "^10.2.6",
+		"tree-sitter": "^0.25.1",
+		"tree-sitter-bash": "^0.25.1"
+	}
+}
