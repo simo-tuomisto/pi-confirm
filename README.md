@@ -8,7 +8,7 @@ A confirmation extension for [pi](https://github.com/earendil-works/pi) that ask
 
 | Tool | Guarded by | Behavior |
 |------|------------|----------|
-| `bash` | `confirm-commands` | The command line is parsed with tree-sitter-bash and **every distinct program it invokes** (e.g. `grep` in `ls && grep foo bar`) is checked separately. |
+| `bash` | `confirm-commands` | The command line is parsed with [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) and **every distinct program it invokes** (e.g. `grep` in `ls && grep foo bar`) is checked separately. |
 | `powershell` | `confirm-commands` | The whole command (and its first word) is checked. |
 | `write` | `confirm-files` | The file path is checked (creates or overwrites a file). |
 | `edit` | `confirm-files` | The file path is checked (modifies a file). |
@@ -156,7 +156,7 @@ npm install
 
 ## AI usage
 
-This project was created with AI. Idea to use tree-sitter and other design decisions were made by human.
+This project was created with AI. Idea to use [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and other design decisions were made by human.
 
 ## License
 
