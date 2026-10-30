@@ -3,6 +3,9 @@
 	"version": "0.1.0",
 	"private": true,
 	"description": "Dependencies for the pi-confirm extension",
+	"scripts": {
+		"test": "node test/index.test.mjs"
+	},
 	"dependencies": {
 		"minimatch": "^10.2.6",
 		"tree-sitter": "^0.25.1",
